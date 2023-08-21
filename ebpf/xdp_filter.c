@@ -28,6 +28,7 @@
 #include <linux/tcp.h>
 #include <linux/udp.h>
 #include <bpf/bpf_helpers.h>
+#include <xdp/xdp_helpers.h>
 
 #include "hash_func01.h"
 
@@ -59,6 +60,11 @@
 /* no vlan tracking: set it to 0 if you don't use VLAN for tracking. Can
  * also be used as workaround of some hardware offload issue */
 #define VLAN_TRACKING    1
+
+struct {
+        __uint(priority, 10);
+        __uint(XDP_PASS, 1);
+} XDP_RUN_CONFIG(xdp_hashfilter);
 
 struct vlan_hdr {
     __u16	h_vlan_TCI;

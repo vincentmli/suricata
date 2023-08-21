@@ -317,6 +317,10 @@ typedef struct AFPThreadVars_
     int ebpf_lb_fd;
     int ebpf_filter_fd;
 
+#ifdef HAVE_MULTI_XDP
+    int xdp_filter_fd;
+#endif
+
     int promisc;
 
     int down_count;
@@ -2794,6 +2798,9 @@ TmEcode ReceiveAFPThreadInit(ThreadVars *tv, const void *initdata, void **data)
     ptv->ebpf_lb_fd = afpconfig->ebpf_lb_fd;
     ptv->ebpf_filter_fd = afpconfig->ebpf_filter_fd;
     ptv->xdp_mode = afpconfig->xdp_mode;
+#ifdef HAVE_MULTI_XDP
+    ptv->xdp_filter_fd = afpconfig->xdp_filter_fd;
+#endif
 #ifdef HAVE_PACKET_EBPF
     ptv->ebpf_t_config.cpus_count = UtilCpuGetNumProcessorsConfigured();
 
@@ -2902,7 +2909,11 @@ TmEcode ReceiveAFPThreadDeinit(ThreadVars *tv, void *data)
 #ifdef HAVE_PACKET_XDP
     if ((ptv->ebpf_t_config.flags & EBPF_XDP_CODE) &&
         (!(ptv->ebpf_t_config.flags & EBPF_PINNED_MAPS))) {
+#ifdef HAVE_MULTI_XDP
+        EBPFDetachMultiXDP(ptv->iface, ptv->xdp_filter_fd);
+#else
         EBPFSetupXDP(ptv->iface, -1, ptv->xdp_mode);
+#endif
     }
 #endif
     if (ptv->data != NULL) {

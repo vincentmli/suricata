@@ -529,9 +529,15 @@ static void *ParseAFPConfig(const char *iface)
     /* One shot loading of the eBPF file */
     if (aconf->xdp_filter_file) {
 #ifdef HAVE_PACKET_XDP
+#ifdef HAVE_MULTI_XDP
+        int ret = EBPFLoadMultiXDPFile(aconf->iface, aconf->xdp_filter_file, "xdp",
+                               &aconf->xdp_filter_fd,
+                               &aconf->ebpf_t_config);
+#else
         int ret = EBPFLoadFile(aconf->iface, aconf->xdp_filter_file, "xdp",
                                &aconf->xdp_filter_fd,
                                &aconf->ebpf_t_config);
+#endif
         switch (ret) {
             case 1:
                 SCLogInfo("Loaded pinned maps from sysfs");

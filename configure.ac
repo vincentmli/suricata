@@ -1814,6 +1814,7 @@
 	        [ enable_ebpf="no"])
 
     have_xdp="no"
+    have_multixdp="no"
     if test "$enable_ebpf" = "yes"; then
         AC_CHECK_LIB(elf,elf_begin,,LIBELF="no")
         if test "$LIBELF" = "no"; then
@@ -1840,6 +1841,11 @@
         AC_CHECK_LIB(bpf, bpf_set_link_xdp_fd,have_xdp="yes")
         if test "$have_xdp" = "yes"; then
             AC_DEFINE([HAVE_PACKET_XDP],[1],[XDP support is available])
+        fi
+        AC_CHECK_LIB(xdp, xdp_program__open_file,have_multixdp="yes")
+        if test "$have_multixdp" = "yes"; then
+            AC_DEFINE([HAVE_MULTI_XDP],[1],[MULTI XDP support is available])
+	    LIBS="${LIBS} -lxdp"
         fi
         AC_CHECK_FUNCS(bpf_program__section_name)
     fi;

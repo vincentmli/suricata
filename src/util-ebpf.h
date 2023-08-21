@@ -76,8 +76,10 @@ typedef struct EBPFBypassData_ {
 int EBPFGetMapFDByName(const char *iface, const char *name);
 int EBPFLoadFile(const char *iface, const char *path, const char * section,
                  int *val, struct ebpf_timeout_config *config);
+int EBPFLoadMultiXDPFile(const char *iface, const char *path, const char * section,
+                 int *val, struct ebpf_timeout_config *config);
 int EBPFSetupXDP(const char *iface, int fd, uint8_t flags);
-
+int EBPFDetachMultiXDP(const char *iface, int fd);
 int EBPFCheckBypassedFlowTimeout(ThreadVars *th_v, struct flows_stats *bypassstats,
                                         struct timespec *curtime,
                                         void *data);

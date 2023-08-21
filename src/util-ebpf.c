@@ -53,6 +53,7 @@
 
 #include <bpf/libbpf.h>
 #include <bpf/bpf.h>
+#include <xdp/libxdp.h>
 #include <net/if.h>
 #include "autoconf.h"
 
@@ -291,6 +292,167 @@ alloc_error:
     return -1;
 }
 
+static int EBPFStoreBpfObjMapsData(const char *iface, struct bpf_object *bpfobj,
+                                   struct ebpf_timeout_config *config)
+{
+    /* Kernel and userspace are sharing data via map. Userspace access to the
+     * map via a file descriptor. So we need to store the map to fd info. For
+     * that we use bpf_maps_info:: */
+
+    struct bpf_map *map = NULL;
+    if (iface == NULL)
+        return -1;
+    LiveDevice *livedev = LiveGetDevice(iface);
+    if (livedev == NULL)
+        return -1;
+
+    struct bpf_maps_info *bpf_map_data = SCCalloc(1, sizeof(*bpf_map_data));
+    if (bpf_map_data == NULL) {
+        SCLogError(SC_ERR_MEM_ALLOC, "Can't allocate bpf map array");
+        return -1;
+    }
+
+    /* Store the maps in bpf_maps_info:: */
+    bpf_map__for_each(map, bpfobj) {
+        if (bpf_map_data->last == BPF_MAP_MAX_COUNT) {
+            SCLogError(SC_ERR_NOT_SUPPORTED, "Too many BPF maps in eBPF files");
+            break;
+        }
+        SCLogDebug("Got a map '%s' with fd '%d'", bpf_map__name(map), bpf_map__fd(map));
+        bpf_map_data->array[bpf_map_data->last].fd = bpf_map__fd(map);
+        bpf_map_data->array[bpf_map_data->last].name = SCStrdup(bpf_map__name(map));
+        snprintf(bpf_map_data->array[bpf_map_data->last].iface, IFNAMSIZ,
+                 "%s", iface);
+        if (!bpf_map_data->array[bpf_map_data->last].name) {
+            SCLogError(SC_ERR_MEM_ALLOC, "Unable to duplicate map name");
+            BpfMapsInfoFree(bpf_map_data);
+            return -1;
+        }
+        bpf_map_data->array[bpf_map_data->last].to_unlink = 0;
+        if (config->flags & EBPF_PINNED_MAPS) {
+            SCLogConfig("Pinning: %d to %s", bpf_map_data->array[bpf_map_data->last].fd,
+                    bpf_map_data->array[bpf_map_data->last].name);
+            char buf[1024];
+            snprintf(buf, sizeof(buf), "/sys/fs/bpf/suricata-%s-%s", iface,
+                    bpf_map_data->array[bpf_map_data->last].name);
+            int ret = bpf_obj_pin(bpf_map_data->array[bpf_map_data->last].fd, buf);
+            if (ret != 0) {
+                SCLogWarning(SC_ERR_AFP_CREATE, "Can not pin: %s", strerror(errno));
+            }
+            /* Don't unlink pinned maps in XDP mode to avoid a state reset */
+            if (config->flags & EBPF_XDP_CODE) {
+                bpf_map_data->array[bpf_map_data->last].to_unlink = 0;
+            } else {
+                bpf_map_data->array[bpf_map_data->last].to_unlink = 1;
+            }
+        }
+        bpf_map_data->last++;
+    }
+
+    /* Attach the bpf_maps_info to the LiveDevice via the device storage */
+    LiveDevSetStorageById(livedev, g_livedev_storage_id, bpf_map_data);
+    LiveDevUseBypass(livedev);
+    return 0;
+}
+
+int EBPFLoadMultiXDPFile(const char *iface, const char *path, const char * section,
+                 int *val, struct ebpf_timeout_config *config)
+{
+    int err;
+    char buf[129];
+    struct xdp_program *p = NULL;
+    struct bpf_object *bpfobj = NULL;
+    struct bpf_program *bpfprog = NULL;
+    struct bpf_map *map = NULL;
+
+    DECLARE_LIBXDP_OPTS(xdp_program_opts, xdp_opts, 0);
+
+    if (iface == NULL)
+        return -1;
+    LiveDevice *livedev = LiveGetDevice(iface);
+    if (livedev == NULL)
+        return -1;
+
+    unsigned int ifindex = if_nametoindex(iface);
+    if (ifindex == 0) {
+        SCLogError(SC_ERR_INVALID_VALUE,
+                "Unknown interface '%s'", iface);
+        return -1;
+    }
+
+    if (config->flags & EBPF_XDP_CODE && config->flags & EBPF_PINNED_MAPS) {
+        /* We try to get our flow table maps and if we have them we can simply return */
+        if (EBPFLoadPinnedMaps(livedev, config) == 0) {
+            SCLogInfo("Loaded pinned maps, will use already loaded eBPF filter");
+            return 1;
+        }
+    }
+
+    if (! path) {
+        SCLogError(SC_ERR_INVALID_VALUE, "No file defined to load eBPF from");
+        return -1;
+    }
+
+    /* Sending the eBPF code to the kernel requires a large amount of
+     * locked memory so we set it to unlimited to avoid a ENOPERM error */
+    struct rlimit r = {RLIM_INFINITY, RLIM_INFINITY};
+    if (setrlimit(RLIMIT_MEMLOCK, &r) != 0) {
+        SCLogError(SC_ERR_MEM_ALLOC, "Unable to lock memory: %s (%d)",
+                   strerror(errno), errno);
+        return -1;
+    }
+
+    xdp_opts.open_filename = path;
+    p = xdp_program__create(&xdp_opts);
+    err = libxdp_get_error(p);
+    if (err) {
+        libxdp_strerror(err, buf, sizeof(buf));
+        SCLogError(SC_ERR_INVALID_VALUE, "Unable to create multi xdp program on '%s': %s (%d)",
+            iface, buf, err);
+       p = NULL;
+       goto error_out;
+     }
+
+    bpfobj = xdp_program__bpf_obj(p);
+    err = libxdp_get_error(bpfobj);
+    if (err) {
+        libxdp_strerror(err, buf, sizeof(buf));
+        SCLogError(SC_ERR_INVALID_VALUE, "Unable to get multi XDP bpf object on '%s': %s (%d)",
+            iface, buf, err);
+       p = NULL;
+       goto error_out;
+     }
+
+    if (config->flags & EBPF_XDP_HW_MODE) {
+        bpf_object__for_each_program(bpfprog, bpfobj) {
+            bpf_program__set_ifindex(bpfprog, ifindex);
+        }
+        bpf_map__for_each(map, bpfobj) {
+            bpf_map__set_ifindex(map, ifindex);
+        }
+    }
+
+    err = xdp_program__attach(p, ifindex, config->mode, 0);
+    if (err != 0) {
+        libxdp_strerror(err, buf, sizeof(buf));
+        SCLogError(SC_ERR_INVALID_VALUE, "Unable to attach multi XDP on '%s': %s (%d)",
+                iface, buf, err);
+        goto error_out;
+    }
+    SCLogInfo("Successfully loaded eBPF file '%s' on '%s'", path, iface);
+
+    /* Store map data from bpf object */
+    if ( EBPFStoreBpfObjMapsData(iface, bpfobj, config) == 0)
+        SCLogInfo("Stored map data successfully!");
+
+    *val = xdp_program__fd(p);
+    return 0;
+
+error_out:
+    xdp_program__close(p);
+    return -1;
+}
+
 /**
  * Load a section of an eBPF file
  *
@@ -406,55 +568,9 @@ int EBPFLoadFile(const char *iface, const char *path, const char * section,
         return -1;
     }
 
-    /* Kernel and userspace are sharing data via map. Userspace access to the
-     * map via a file descriptor. So we need to store the map to fd info. For
-     * that we use bpf_maps_info:: */
-    struct bpf_maps_info *bpf_map_data = SCCalloc(1, sizeof(*bpf_map_data));
-    if (bpf_map_data == NULL) {
-        SCLogError(SC_ERR_MEM_ALLOC, "Can't allocate bpf map array");
-        return -1;
-    }
-
-    /* Store the maps in bpf_maps_info:: */
-    bpf_map__for_each(map, bpfobj) {
-        if (bpf_map_data->last == BPF_MAP_MAX_COUNT) {
-            SCLogError(SC_ERR_NOT_SUPPORTED, "Too many BPF maps in eBPF files");
-            break;
-        }
-        SCLogDebug("Got a map '%s' with fd '%d'", bpf_map__name(map), bpf_map__fd(map));
-        bpf_map_data->array[bpf_map_data->last].fd = bpf_map__fd(map);
-        bpf_map_data->array[bpf_map_data->last].name = SCStrdup(bpf_map__name(map));
-        snprintf(bpf_map_data->array[bpf_map_data->last].iface, IFNAMSIZ,
-                 "%s", iface);
-        if (!bpf_map_data->array[bpf_map_data->last].name) {
-            SCLogError(SC_ERR_MEM_ALLOC, "Unable to duplicate map name");
-            BpfMapsInfoFree(bpf_map_data);
-            return -1;
-        }
-        bpf_map_data->array[bpf_map_data->last].to_unlink = 0;
-        if (config->flags & EBPF_PINNED_MAPS) {
-            SCLogConfig("Pinning: %d to %s", bpf_map_data->array[bpf_map_data->last].fd,
-                    bpf_map_data->array[bpf_map_data->last].name);
-            char buf[1024];
-            snprintf(buf, sizeof(buf), "/sys/fs/bpf/suricata-%s-%s", iface,
-                    bpf_map_data->array[bpf_map_data->last].name);
-            int ret = bpf_obj_pin(bpf_map_data->array[bpf_map_data->last].fd, buf);
-            if (ret != 0) {
-                SCLogWarning(SC_ERR_AFP_CREATE, "Can not pin: %s", strerror(errno));
-            }
-            /* Don't unlink pinned maps in XDP mode to avoid a state reset */
-            if (config->flags & EBPF_XDP_CODE) {
-                bpf_map_data->array[bpf_map_data->last].to_unlink = 0;
-            } else {
-                bpf_map_data->array[bpf_map_data->last].to_unlink = 1;
-            }
-        }
-        bpf_map_data->last++;
-    }
-
-    /* Attach the bpf_maps_info to the LiveDevice via the device storage */
-    LiveDevSetStorageById(livedev, g_livedev_storage_id, bpf_map_data);
-    LiveDevUseBypass(livedev);
+    /* Store map data from bpf object */
+    if ( EBPFStoreBpfObjMapsData(iface, bpfobj, config) == 0)
+        SCLogInfo("Stored map data successfully!");
 
     /* Finally we get the file descriptor for our eBPF program. We will use
      * the fd to attach the program to the socket (eBPF case) or to the device
@@ -468,6 +584,7 @@ int EBPFLoadFile(const char *iface, const char *path, const char * section,
 
     SCLogInfo("Successfully loaded eBPF file '%s' on '%s'", path, iface);
     *val = pfd;
+
     return 0;
 }
 
@@ -482,6 +599,9 @@ int EBPFLoadFile(const char *iface, const char *path, const char * section,
 int EBPFSetupXDP(const char *iface, int fd, uint8_t flags)
 {
 #ifdef HAVE_PACKET_XDP
+#ifdef HAVE_MULTI_XDP
+    return 0;
+#else
     unsigned int ifindex = if_nametoindex(iface);
     if (ifindex == 0) {
         SCLogError(SC_ERR_INVALID_VALUE,
@@ -497,8 +617,33 @@ int EBPFSetupXDP(const char *iface, int fd, uint8_t flags)
         return -1;
     }
 #endif
+#endif
     return 0;
 }
+
+#ifdef HAVE_MULTI_XDP
+int EBPFDetachMultiXDP(const char *iface, int fd)
+{
+    int err;
+    unsigned int ifindex = if_nametoindex(iface);
+    if (ifindex == 0) {
+        SCLogError(SC_ERR_INVALID_VALUE,
+                "Unknown interface '%s'", iface);
+        return -1;
+    }
+    struct xdp_program *prog = xdp_program__from_fd(fd);
+    err = xdp_program__detach(prog, ifindex, 0, 0);
+    if (err != 0) {
+        char buf[129];
+        libxdp_strerror(err, buf, sizeof(buf));
+        SCLogError(SC_ERR_INVALID_VALUE, "Unable to detach XDP on '%s': %s (%d)",
+                iface, buf, err);
+        return -1;
+    }
+    xdp_program__close(prog);
+    return 0;
+}
+#endif
 
 /**
  * Create a Flow in the table for a Flowkey
