@@ -107,7 +107,13 @@ typedef struct AFPIfaceConfig_
     int ebpf_filter_fd;
     const char *xdp_filter_file;
     int xdp_filter_fd;
+    const char *xdp_syncookie_file;
+    int xdp_syncookie_fd;
     uint8_t xdp_mode;
+#ifdef HAVE_MULTI_XDP
+    uint32_t xdp_filter_prio;
+    uint32_t xdp_syncookie_prio;
+#endif
     const char *out_iface;
 #ifdef HAVE_PACKET_EBPF
     struct ebpf_timeout_config ebpf_t_config;

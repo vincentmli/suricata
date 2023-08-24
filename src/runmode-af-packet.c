@@ -514,6 +514,18 @@ static void *ParseAFPConfig(const char *iface)
                              "Invalid xdp-mode value: '%s'", xdp_mode);
             }
         }
+#ifdef HAVE_MULTI_XDP
+        const char *run_prio;
+        if (ConfGetChildValueWithDefault(if_root, if_default, "xdp-filter-prio", &run_prio) != 1) {
+        aconf->xdp_filter_prio = 0;
+        } else {
+            if (StringParseUint32(&aconf->xdp_filter_prio, 10, 0, (const char *)run_prio) < 0) {
+                SCLogWarning(SC_ERR_INVALID_VALUE, "Invalid xdp_filter_prio, resetting to 0");
+                aconf->xdp_filter_prio = 0;
+            }
+        SCLogDebug("Going to use xdp_filter_prio %" PRIu32, aconf->xdp_filter_prio);
+        }
+#endif
 
         boolval = true;
         if (ConfGetChildValueBoolWithDefault(if_root, if_default, "use-percpu-hash", (int *)&boolval) == 1) {
@@ -530,9 +542,9 @@ static void *ParseAFPConfig(const char *iface)
     if (aconf->xdp_filter_file) {
 #ifdef HAVE_PACKET_XDP
 #ifdef HAVE_MULTI_XDP
-        int ret = EBPFLoadMultiXDPFile(aconf->iface, aconf->xdp_filter_file, "xdp",
-                               &aconf->xdp_filter_fd,
-                               &aconf->ebpf_t_config);
+        int ret = EBPFLoadMultiXDPFile(aconf, aconf->xdp_filter_file, aconf->xdp_filter_prio,
+                                       &aconf->xdp_filter_fd,
+                                       &aconf->ebpf_t_config);
 #else
         int ret = EBPFLoadFile(aconf->iface, aconf->xdp_filter_file, "xdp",
                                &aconf->xdp_filter_fd,

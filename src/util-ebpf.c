@@ -355,7 +355,7 @@ static int EBPFStoreBpfObjMapsData(const char *iface, struct bpf_object *bpfobj,
     return 0;
 }
 
-int EBPFLoadMultiXDPFile(const char *iface, const char *path, const char * section,
+int EBPFLoadMultiXDPFile(AFPIfaceConfig *aconf, const char *path, uint32_t prio,
                  int *val, struct ebpf_timeout_config *config)
 {
     int err;
@@ -364,6 +364,9 @@ int EBPFLoadMultiXDPFile(const char *iface, const char *path, const char * secti
     struct bpf_object *bpfobj = NULL;
     struct bpf_program *bpfprog = NULL;
     struct bpf_map *map = NULL;
+
+    const char *iface = aconf->iface;
+    unsigned int run_prio = (unsigned int)prio;
 
     DECLARE_LIBXDP_OPTS(xdp_program_opts, xdp_opts, 0);
 
@@ -380,11 +383,13 @@ int EBPFLoadMultiXDPFile(const char *iface, const char *path, const char * secti
         return -1;
     }
 
-    if (config->flags & EBPF_XDP_CODE && config->flags & EBPF_PINNED_MAPS) {
+    if (!strcmp(aconf->xdp_filter_file, path)) {
+        if (config->flags & EBPF_XDP_CODE && config->flags & EBPF_PINNED_MAPS) {
         /* We try to get our flow table maps and if we have them we can simply return */
-        if (EBPFLoadPinnedMaps(livedev, config) == 0) {
-            SCLogInfo("Loaded pinned maps, will use already loaded eBPF filter");
-            return 1;
+            if (EBPFLoadPinnedMaps(livedev, config) == 0) {
+                SCLogInfo("Loaded pinned maps, will use already loaded eBPF filter");
+                return 1;
+            }
         }
     }
 
@@ -432,18 +437,30 @@ int EBPFLoadMultiXDPFile(const char *iface, const char *path, const char * secti
         }
     }
 
-    err = xdp_program__attach(p, ifindex, config->mode, 0);
+    if (run_prio) {
+        err = xdp_program__set_run_prio(p, run_prio);
+        if (err != 0) {
+            libxdp_strerror(err, buf, sizeof(buf));
+            SCLogWarning(SC_ERR_INVALID_VALUE, "Unable to set run prio multi XDP on '%s': %s (%d)",
+                iface, buf, err);
+        }
+    }
+
+    err = xdp_program__attach(p, ifindex, aconf->xdp_mode, 0);
     if (err != 0) {
         libxdp_strerror(err, buf, sizeof(buf));
         SCLogError(SC_ERR_INVALID_VALUE, "Unable to attach multi XDP on '%s': %s (%d)",
                 iface, buf, err);
         goto error_out;
     }
-    SCLogInfo("Successfully loaded eBPF file '%s' on '%s'", path, iface);
 
     /* Store map data from bpf object */
-    if ( EBPFStoreBpfObjMapsData(iface, bpfobj, config) == 0)
-        SCLogInfo("Stored map data successfully!");
+    if (!strcmp(aconf->xdp_filter_file, path)) {
+        if ( EBPFStoreBpfObjMapsData(iface, bpfobj, config) == 0)
+            SCLogInfo("Stored map data successfully!");
+    }
+
+    SCLogInfo("Successfully loaded eBPF file '%s' on '%s'", path, iface);
 
     *val = xdp_program__fd(p);
     return 0;
