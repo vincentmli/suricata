@@ -457,7 +457,7 @@ int EBPFLoadMultiXDPFile(AFPIfaceConfig *aconf, const char *path, uint32_t prio,
     /* Store map data from bpf object */
     if (!strcmp(aconf->xdp_filter_file, path)) {
         if ( EBPFStoreBpfObjMapsData(iface, bpfobj, config) == 0)
-            SCLogInfo("Stored map data successfully!");
+            SCLogInfo("Stored %s map data successfully!", path);
     }
 
     SCLogInfo("Successfully loaded eBPF file '%s' on '%s'", path, iface);

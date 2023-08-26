@@ -319,6 +319,7 @@ typedef struct AFPThreadVars_
 
 #ifdef HAVE_MULTI_XDP
     int xdp_filter_fd;
+    int xdp_syncookie_fd;
 #endif
 
     int promisc;
@@ -2800,6 +2801,7 @@ TmEcode ReceiveAFPThreadInit(ThreadVars *tv, const void *initdata, void **data)
     ptv->xdp_mode = afpconfig->xdp_mode;
 #ifdef HAVE_MULTI_XDP
     ptv->xdp_filter_fd = afpconfig->xdp_filter_fd;
+    ptv->xdp_syncookie_fd = afpconfig->xdp_syncookie_fd;
 #endif
 #ifdef HAVE_PACKET_EBPF
     ptv->ebpf_t_config.cpus_count = UtilCpuGetNumProcessorsConfigured();
@@ -2911,6 +2913,7 @@ TmEcode ReceiveAFPThreadDeinit(ThreadVars *tv, void *data)
         (!(ptv->ebpf_t_config.flags & EBPF_PINNED_MAPS))) {
 #ifdef HAVE_MULTI_XDP
         EBPFDetachMultiXDP(ptv->iface, ptv->xdp_filter_fd);
+        EBPFDetachMultiXDP(ptv->iface, ptv->xdp_syncookie_fd);
 #else
         EBPFSetupXDP(ptv->iface, -1, ptv->xdp_mode);
 #endif

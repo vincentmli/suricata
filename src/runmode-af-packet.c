@@ -497,6 +497,47 @@ static void *ParseAFPConfig(const char *iface)
 #else
         SCLogWarning(SC_ERR_UNIMPLEMENTED, "XDP filter set but XDP support is not built-in");
 #endif
+
+#ifdef HAVE_MULTI_XDP
+        const char *run_prio;
+        if (ConfGetChildValueWithDefault(if_root, if_default, "xdp-filter-prio", &run_prio) != 1) {
+        aconf->xdp_filter_prio = 0;
+        } else {
+            if (StringParseUint32(&aconf->xdp_filter_prio, 10, 0, (const char *)run_prio) < 0) {
+                SCLogWarning(SC_ERR_INVALID_VALUE, "Invalid xdp_filter_prio, resetting to 0");
+                aconf->xdp_filter_prio = 0;
+            }
+        SCLogDebug("Going to use xdp_filter_prio %" PRIu32, aconf->xdp_filter_prio);
+        }
+#endif
+
+    }
+
+    if (ConfGetChildValueWithDefault(if_root, if_default, "xdp-syncookie-file", &ebpf_file) != 1) {
+        aconf->xdp_syncookie_file = NULL;
+    } else {
+#ifdef HAVE_PACKET_XDP
+        aconf->ebpf_t_config.flags |= EBPF_XDP_CODE;
+        aconf->xdp_syncookie_file = ebpf_file;
+#else
+        SCLogWarning(SC_ERR_UNIMPLEMENTED, "XDP syncookie set but XDP support is not built-in");
+#endif
+
+#ifdef HAVE_MULTI_XDP
+        const char *run_prio;
+        if (ConfGetChildValueWithDefault(if_root, if_default, "xdp-syncookie-prio", &run_prio) != 1) {
+        aconf->xdp_filter_prio = 0;
+        } else {
+            if (StringParseUint32(&aconf->xdp_syncookie_prio, 10, 0, (const char *)run_prio) < 0) {
+                SCLogWarning(SC_ERR_INVALID_VALUE, "Invalid xdp_filter_prio, resetting to 0");
+                aconf->xdp_syncookie_prio = 0;
+            }
+        SCLogDebug("Going to use xdp_filter_prio %" PRIu32, aconf->xdp_syncookie_prio);
+        }
+#endif
+
+    }
+
 #ifdef HAVE_PACKET_XDP
         const char *xdp_mode;
         if (ConfGetChildValueWithDefault(if_root, if_default, "xdp-mode", &xdp_mode) != 1) {
@@ -514,18 +555,6 @@ static void *ParseAFPConfig(const char *iface)
                              "Invalid xdp-mode value: '%s'", xdp_mode);
             }
         }
-#ifdef HAVE_MULTI_XDP
-        const char *run_prio;
-        if (ConfGetChildValueWithDefault(if_root, if_default, "xdp-filter-prio", &run_prio) != 1) {
-        aconf->xdp_filter_prio = 0;
-        } else {
-            if (StringParseUint32(&aconf->xdp_filter_prio, 10, 0, (const char *)run_prio) < 0) {
-                SCLogWarning(SC_ERR_INVALID_VALUE, "Invalid xdp_filter_prio, resetting to 0");
-                aconf->xdp_filter_prio = 0;
-            }
-        SCLogDebug("Going to use xdp_filter_prio %" PRIu32, aconf->xdp_filter_prio);
-        }
-#endif
 
         boolval = true;
         if (ConfGetChildValueBoolWithDefault(if_root, if_default, "use-percpu-hash", (int *)&boolval) == 1) {
@@ -536,7 +565,6 @@ static void *ParseAFPConfig(const char *iface)
             }
         }
 #endif
-    }
 
     /* One shot loading of the eBPF file */
     if (aconf->xdp_filter_file) {
@@ -588,6 +616,35 @@ static void *ParseAFPConfig(const char *iface)
         }
 #else
         SCLogError(SC_ERR_UNIMPLEMENTED, "XDP support is not built-in");
+#endif
+    }
+
+    if (aconf->xdp_syncookie_file) {
+#ifdef HAVE_PACKET_XDP
+#ifdef HAVE_MULTI_XDP
+        int ret = EBPFLoadMultiXDPFile(aconf, aconf->xdp_syncookie_file, aconf->xdp_syncookie_prio,
+                                       &aconf->xdp_syncookie_fd,
+                                       &aconf->ebpf_t_config);
+#else
+        int ret = EBPFLoadFile(aconf->iface, aconf->xdp_filter_file, "xdp",
+                               &aconf->xdp_filter_fd,
+                               &aconf->ebpf_t_config);
+#endif
+        switch (ret) {
+            case 1:
+                SCLogInfo("Loaded pinned maps from sysfs");
+                break;
+            case -1:
+                SCLogWarning(SC_ERR_INVALID_VALUE,
+                             "Error when loading XDP filter file");
+                break;
+            case 0:
+                ret = EBPFSetupXDP(aconf->iface, aconf->xdp_syncookie_fd, aconf->xdp_mode);
+                if (ret != 0) {
+                    SCLogWarning(SC_ERR_INVALID_VALUE,
+                            "Error when setting up XDP syncookie");
+                }
+        }
 #endif
     }
 
