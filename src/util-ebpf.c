@@ -551,9 +551,9 @@ int EBPFLoadFile(const char *iface, const char *path, const char * section,
 #endif
         if (!strcmp(title, section)) {
             if (config->flags & EBPF_SOCKET_FILTER) {
-                bpf_program__set_socket_filter(bpfprog);
+                bpf_program__set_type(bpfprog, BPF_PROG_TYPE_SOCKET_FILTER);
             } else {
-                bpf_program__set_xdp(bpfprog);
+                bpf_program__set_type(bpfprog, BPF_PROG_TYPE_XDP);
             }
             found = true;
             break;

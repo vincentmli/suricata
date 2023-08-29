@@ -57,6 +57,8 @@
 
 #include "source-af-packet.h"
 
+int EBPFUpdateFlow(Flow *f, Packet *p, void *data);
+
 extern int max_pending_packets;
 
 const char *RunModeAFPGetDefaultMode(void)
