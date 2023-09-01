@@ -28,6 +28,7 @@
 #include <linux/tcp.h>
 #include <linux/udp.h>
 #include <bpf/bpf_helpers.h>
+#include <bpf/bpf_endian.h>
 #include <xdp/xdp_helpers.h>
 
 #include "hash_func01.h"
@@ -289,6 +290,7 @@ static int __always_inline filter_ipv4(struct xdp_md *ctx, void *data, __u64 nh_
 
     value = bpf_map_lookup_elem(&flow_table_v4, &tuple);
 #if 0
+    bpf_printk("xdp_filter source port %d\n", bpf_ntohs(sport));
     {
         char fmt[] = "Current flow src: %u:%d\n";
         char fmt1[] = "Current flow dst: %u:%d\n";

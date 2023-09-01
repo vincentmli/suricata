@@ -446,6 +446,18 @@ int EBPFLoadMultiXDPFile(AFPIfaceConfig *aconf, const char *path, uint32_t prio,
         }
     }
 
+    err = xdp_program__set_chain_call_enabled(p, XDP_PASS, true);
+    if (err) {
+        libxdp_strerror(err, buf, sizeof(buf));
+        SCLogError(SC_ERR_INVALID_VALUE, "Unable to set multi XDP chain call action on '%s': %s (%d)",
+                iface, buf, err);
+        goto error_out;
+    }
+
+    xdp_program__print_chain_call_actions(p, buf, sizeof(buf));
+    SCLogInfo("XDP program: %s. Run prio: %d. Chain call actions: %s\n",
+                         path, xdp_program__run_prio(p), buf);
+
     err = xdp_program__attach(p, ifindex, aconf->xdp_mode, 0);
     if (err != 0) {
         libxdp_strerror(err, buf, sizeof(buf));
