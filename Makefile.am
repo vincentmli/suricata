@@ -12,6 +12,9 @@ SUBDIRS = $(HTP_DIR) rust src qa rules doc contrib etc python ebpf \
 
 CLEANFILES = stamp-h[0-9]*
 
+BPF_FILES = $(wildcard $(top_srcdir)/ebpf/*.bpf)
+BPF_INSTALL_DIR = $(DESTDIR)$(e_sysconfdir)/ebpf
+
 install-data-am:
 	@echo "Run 'make install-conf' if you want to install initial configuration files. Or 'make install-full' to install configuration and rules";
 
@@ -19,6 +22,10 @@ install-full:
 	$(MAKE) install
 	$(MAKE) install-conf
 	$(MAKE) install-rules
+
+install-ebpf:
+	install -d "$(BPF_INSTALL_DIR)"
+	$(INSTALL_DATA) $(BPF_FILES) $(BPF_INSTALL_DIR)
 
 install-conf:
 	install -d "$(DESTDIR)$(e_sysconfdir)"
