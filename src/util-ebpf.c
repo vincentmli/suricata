@@ -398,15 +398,6 @@ int EBPFLoadMultiXDPFile(AFPIfaceConfig *aconf, const char *path, uint32_t prio,
         return -1;
     }
 
-    /* Sending the eBPF code to the kernel requires a large amount of
-     * locked memory so we set it to unlimited to avoid a ENOPERM error */
-    struct rlimit r = {RLIM_INFINITY, RLIM_INFINITY};
-    if (setrlimit(RLIMIT_MEMLOCK, &r) != 0) {
-        SCLogError(SC_ERR_MEM_ALLOC, "Unable to lock memory: %s (%d)",
-                   strerror(errno), errno);
-        return -1;
-    }
-
     xdp_opts.open_filename = path;
     p = xdp_program__create(&xdp_opts);
     err = libxdp_get_error(p);
